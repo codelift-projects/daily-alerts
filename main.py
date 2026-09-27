@@ -1,7 +1,9 @@
 import os
+from datetime import date
 import requests
 from dotenv import load_dotenv
 from supabase import create_client
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -13,11 +15,11 @@ ALERT_TO_EMAIL = os.getenv("ALERT_TO_EMAIL", "codelift.official@gmail.com")
 
 THRESHOLD = 5000.0
 
-def send_email(sales):
-    report_lines = [ f"Daily Sales Audit (Target: Rs. {THRESHOLD})" ]
+def send_email(sales, today_str):
+    report_lines = [ f"Daily Sales Audit — {today_str} (Target: Rs. {THRESHOLD})" ]
     for branch, total in sales.items():
         diff = total - THRESHOLD
-        margin = f"+Rs. {diff}" if diff >= 0 else f"-Rs. {diff}"
+        margin = f"+Rs. {diff}" if diff >= 0 else f"-Rs. {abs(diff)}"
         status = "GOOD [GREEN]" if total >= THRESHOLD else ("WARNING [ORANGE]" if total >= 3000 else "CRITICAL [RED]")
         report_lines.append(f"{branch}: Rs. {total} — {status} ({margin})")
 
@@ -28,7 +30,7 @@ def send_email(sales):
         "template_params": {
             "studentname": "Operations Team",
             "message": "\n".join(report_lines),
-            "emailtype":"Sales Report",
+            "emailtype": "Daily Sales Report",
             "action_url": "https://supabase.com",
             "action_text": "View Dashboard",
             "to_email": ALERT_TO_EMAIL
@@ -48,21 +50,33 @@ def main():
         return
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    today = date.today().isoformat()
 
-    # Fetch completed orders with branch names
-    orders = supabase.table("orders").select("amount, outlets(name)").eq("status", "COMPLETED").execute().data or []
+    # Fetch all outlets to initialize
+    outlets = supabase.table("outlets").select("name").execute().data or []
+    sales = {o["name"]: 0.0 for o in outlets}
 
-    # Calculate total sales per branch
-    sales = {}
+    # Fetch ONLY today's completed orders
+    orders = (
+        supabase.table("orders")
+        .select("amount, outlets(name)")
+        .eq("status", "COMPLETED")
+        .eq("created_at", today)
+        .execute()
+        .data or []
+    )
+
+    # Aggregate today's sales
     for o in orders:
         branch = o["outlets"]["name"]
         sales[branch] = sales.get(branch, 0.0) + float(o["amount"])
 
     # Print summary to console
+    print(f"--- Sales Report for {today} ---")
     for branch, total in sales.items():
         print(f"{branch}: Rs. {total}")
 
-    send_email(sales)
+    send_email(sales, today)
 
 if __name__ == "__main__":
     main()
